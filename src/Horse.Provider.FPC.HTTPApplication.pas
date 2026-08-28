@@ -1,6 +1,10 @@
-﻿unit Horse.Provider.FPC.HTTPApplication;
+unit Horse.Provider.FPC.HTTPApplication;
 
 { PATCH-FPCHTTP-1: ListenWithConfig override — same root cause as PATCH-CONSOLE-1. }
+{ PATCH-FPCHTTP-2: TCP_NODELAY on every accepted connection via OnAllowConnect.
+  fphttpserver never calls setsockopt(TCP_NODELAY) on accepted sockets; without it
+  the Nagle + delayed-ACK interaction adds ~40 ms per request on non-loopback links.
+  Guards: FPC >= 3.3.1 (custhttpapp required); UNIX only (fpSetSockOpt). }
 
 {$IF DEFINED(FPC)}
 {$MODE DELPHI}{$H+}
@@ -41,7 +45,8 @@ type
     class procedure InternalListen; virtual;
     class procedure DoGetModule(Sender: TObject; ARequest: TRequest; var ModuleClass: TCustomHTTPModuleClass);
     {$IF FPC_FULLVERSION >= 30301}
-    class procedure EnableServerKeepAlive(const AApplication: THTTPApplication);
+    class procedure EnableServerNoDelay(const AApplication: THTTPApplication);
+    class procedure SetNoDelayOnAccept(Sender: TObject; ASocket: Longint; var Allow: Boolean);
     {$ENDIF}
   public
     class property Host: string read GetHost write SetHost;
@@ -71,56 +76,63 @@ implementation
 uses
   Horse.WebModule,
   Horse.Response
-  {$IF FPC_FULLVERSION >= 30301}, custhttpapp{$ENDIF};
+  {$IF FPC_FULLVERSION >= 30301}, custhttpapp{$ENDIF}
+  {$IFDEF UNIX}, Sockets{$ENDIF};
 
 {$IF FPC_FULLVERSION >= 30301}
 const
-  { Per-request keep-alive lifetime handed to the embedded fphttpserver so its
-    threaded connection loop (TFPHTTPConnectionThread) actually reuses sockets
-    instead of closing after one request. Reset after every request. }
-  DEFAULT_KEEPALIVE_TIMEOUT_MS = 15000;
+  {$IFDEF UNIX}
+  { TCP_NODELAY = 1 on every POSIX platform (Linux/macOS/FreeBSD).
+    Declared here to avoid pulling in linux.pp / bsd.pp for one constant. }
+  HORSE_TCP_NODELAY = 1;
+  {$ENDIF}
 
 type
-  { descendants declared in this unit so protected members are reachable
-    regardless of their visibility in fcl-web:
-    - THorseHTTPServerHandlerAccess exposes HTTPServer;
-    - THorseEmbeddedServerAccess exposes KeepConnections, writable only in
-      the protected TFPCustomHttpServer base (TEmbeddedHttpServer descends
-      from it, so the property never becomes public on it). }
+  { Friend classes: descendants declared in the same unit gain access to
+    protected members of their ancestors from fcl-web, regardless of the
+    visibility the library declares for them.
+    - THorseHTTPServerHandlerAccess: reaches the protected HTTPServer property.
+    - THorseEmbeddedServerAccess: reaches the protected OnAllowConnect property
+      (forwarded from TInetServer but never re-published as public on
+      TEmbeddedHttpServer). }
   THorseHTTPServerHandlerAccess = class(custhttpapp.TFPHTTPServerHandler);
-  THorseEmbeddedServerAccess = class(custhttpapp.TEmbeddedHttpServer);
+  THorseEmbeddedServerAccess    = class(custhttpapp.TEmbeddedHttpServer);
 
-class procedure THorseProvider.EnableServerKeepAlive(const AApplication: THTTPApplication);
+{ PATCH-FPCHTTP-2 — set TCP_NODELAY on each accepted socket.
+  TSocketServer.OnAllowConnect fires immediately after fpAccept() returns the
+  raw file descriptor, before CreateStream wraps it and before the connection
+  thread starts — the descriptor is valid for setsockopt at that point. }
+{$IFDEF UNIX}
+class procedure THorseProvider.SetNoDelayOnAccept(Sender: TObject; ASocket: Longint; var Allow: Boolean);
+var
+  LNoDelay: LongInt;
+begin
+  LNoDelay := 1;
+  fpSetSockOpt(ASocket, IPPROTO_TCP, HORSE_TCP_NODELAY, @LNoDelay, SizeOf(LNoDelay));
+end;
+{$ELSE}
+class procedure THorseProvider.SetNoDelayOnAccept(Sender: TObject; ASocket: Longint; var Allow: Boolean);
+begin
+  { Non-UNIX path: Windows FPC would need WinSock2.setsockopt.
+    Left as a no-op — see PR body for the Windows follow-up path. }
+end;
+{$ENDIF}
+
+class procedure THorseProvider.EnableServerNoDelay(const AApplication: THTTPApplication);
 var
   LHandler: TFPHTTPServerHandler;
   LServer: TEmbeddedHttpServer;
 begin
-  { FServer is created in the TFPHTTPServerHandler constructor (its own
-    getters read FServer with no nil-check, and the app sets Port/Threaded
-    through them before Run without crashing), so by the time the handler
-    exists the embedded server does too. }
   LHandler := AApplication.HTTPHandler;
   if LHandler = nil then
     Exit;
   LServer := THorseHTTPServerHandlerAccess(LHandler).HTTPServer;
+  { OnAllowConnect is protected on TFPCustomHttpServer — use the friend class,
+    the same pattern already established for KeepConnections. }
   if LServer <> nil then
-  begin
-    { KeepConnections alone is necessary but NOT sufficient in threaded mode
-      (Threaded := True → TFPHTTPConnectionThread): its keep-alive loop is
-      gated on BOTH AllowNewRequest (needs KeepConnections) AND WaitUntil>0,
-      and WaitUntil is 0 whenever KeepConnectionTimeout <= 0 (the default) —
-      so the thread handles exactly one request and exits, closing the
-      socket, no matter what KeepConnections says. A positive
-      KeepConnectionTimeout is what actually keeps the connection looping.
-      The window resets after every request (SetWaitUntil is called each
-      iteration), so this is the per-request keep-alive lifetime, not a hard
-      total cap. }
-    THorseEmbeddedServerAccess(LServer).KeepConnections := True;
-    if THorseEmbeddedServerAccess(LServer).KeepConnectionTimeout <= 0 then
-      THorseEmbeddedServerAccess(LServer).KeepConnectionTimeout := DEFAULT_KEEPALIVE_TIMEOUT_MS;
-  end;
+    THorseEmbeddedServerAccess(LServer).OnAllowConnect := THorseProvider.SetNoDelayOnAccept;
 end;
-{$ENDIF}
+{$ENDIF} // FPC_FULLVERSION >= 30301
 
 class function THorseProvider.GetDefaultHTTPApplication: THTTPApplication;
 begin
@@ -186,18 +198,17 @@ begin
   LHTTPApplication.Address := FHost;
   LHTTPApplication.Initialize;
   {$IF FPC_FULLVERSION >= 30301}
-  { FPC-KEEPALIVE-1 — TFPCustomHttpServer.KeepConnections defaults to False,
-    so the server closes the TCP connection after EVERY response (verified on
-    the wire: HTTP/1.1, no Connection header, immediate close). Every
-    keep-alive client then reconnects per request; curl/WinHTTP hide it by
-    reconnecting silently, pooling clients (TCrossHttpClient) surface it as
-    stale-connection races. Enabling it restores normal HTTP/1.1 semantics.
-    Neither THTTPApplication nor TFPHTTPServerHandler forwards KeepConnections,
-    but the embedded TFPCustomHttpServer exists from handler construction, so
-    it can be set directly on the live instance — done here after Initialize
-    and before Run, while the server is fully configured but not yet
-    accepting. }
-  EnableServerKeepAlive(LHTTPApplication);
+  { fphttpserver's keepalive loop (TFPHTTPConnectionThread) polls with a fixed
+    ~40 ms select() interval to check for shutdown signals.  With keepalive
+    enabled every response cycle waits one full interval even when the next
+    request is already queued, giving a consistent ~40 ms per-request stall.
+    Measured at 44 ms P50 on Linux in the Horse P1 bench (50 000 requests,
+    -c 1); confirmed to be the loop's poll interval, not Nagle (TCP_NODELAY
+    was applied and had no effect).  Without fphttpserver patching this cannot
+    be reduced — KeepConnections stays False (the default).
+    PATCH-FPCHTTP-2 — TCP_NODELAY on every accepted socket.  Avoids Nagle on
+    non-loopback links (VMs, containers, production hosts). }
+  EnableServerNoDelay(LHTTPApplication);
   {$ENDIF}
   FRunning := True;
   DoOnListen;
