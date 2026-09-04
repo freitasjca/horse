@@ -236,6 +236,12 @@ unit Horse;
 {$IF DEFINED(HORSE_PROVIDER_NGHTTP2) and DEFINED(HORSE_PROVIDER_ICS)}
   {$MESSAGE FATAL 'HORSE_PROVIDER_NGHTTP2 and HORSE_PROVIDER_ICS are mutually exclusive — pick exactly one transport Provider per build.'}
 {$IFEND}
+{ HORSE_PROVIDER_IOCP is tested BEFORE HORSE_PROVIDER_NGHTTP2 in the selector
+  chains below, so without this guard defining both compiles cleanly and IOCP
+  wins silently — the build would use a transport the developer did not ask for. }
+{$IF DEFINED(HORSE_PROVIDER_NGHTTP2) and DEFINED(HORSE_PROVIDER_IOCP)}
+  {$MESSAGE FATAL 'HORSE_PROVIDER_NGHTTP2 and HORSE_PROVIDER_IOCP are mutually exclusive — pick exactly one transport Provider per build.'}
+{$IFEND}
 {$IF DEFINED(HORSE_PROVIDER_HTTPSYS) and (DEFINED(HORSE_PROVIDER_CROSSSOCKET) or DEFINED(HORSE_PROVIDER_MORMOT) or DEFINED(HORSE_PROVIDER_NGHTTP2))}
   {$MESSAGE FATAL 'HORSE_PROVIDER_HTTPSYS is mutually exclusive with other transport Providers — pick exactly one per build.'}
 {$IFEND}
@@ -292,12 +298,14 @@ uses
     {$MESSAGE ERROR 'HORSE_PROVIDER_IOCP is only supported on Windows.'}
     {$ENDIF}
   {$ELSEIF DEFINED(HORSE_PROVIDER_NGHTTP2)}
-  { FPC branch of the nghttp2 selector. Cross-product FPC units
-    (Nghttp2.FPC.Daemon, Nghttp2.FPC.LCL, Nghttp2.FPC.HTTPApplication)
-    aren't shipped in v2.0 — HORSE_APPTYPE_* on FPC currently falls through
-    to the plain console-shape provider. Add them in a follow-up when
-    FPC/Lazarus deployments materialise. }
-  Horse.Provider.Nghttp2,
+  { FPC lifecycle shape selected by the application type. }
+    {$IF DEFINED(HORSE_APPTYPE_DAEMON)}
+    Horse.Provider.Nghttp2.FPC.Daemon,
+    {$ELSEIF DEFINED(HORSE_APPTYPE_LCL)}
+    Horse.Provider.Nghttp2.FPC.LCL,
+    {$ELSE}
+    Horse.Provider.Nghttp2.FPC.HTTPApplication,
+    {$ENDIF}
   {$ELSEIF DEFINED(HORSE_APPTYPE_DAEMON)}
   Horse.Provider.FPC.Daemon,
   {$ELSEIF DEFINED(HORSE_APPTYPE_LCL)}
@@ -523,7 +531,24 @@ type
     THorseProvider = Horse.Provider.ICS.THorseProviderICS;
   {$ENDIF}
 {$ELSEIF DEFINED(HORSE_PROVIDER_NGHTTP2)}
-  THorseProvider = Horse.Provider.Nghttp2.THorseProviderNghttp2;
+  THorseProvider =
+  {$IFDEF FPC}
+    {$IF DEFINED(HORSE_APPTYPE_DAEMON)}
+      Horse.Provider.Nghttp2.FPC.Daemon.THorseProviderNghttp2FPCDaemon;
+    {$ELSEIF DEFINED(HORSE_APPTYPE_LCL)}
+      Horse.Provider.Nghttp2.FPC.LCL.THorseProviderNghttp2FPCLCL;
+    {$ELSE}
+      Horse.Provider.Nghttp2.FPC.HTTPApplication.THorseProviderNghttp2FPCHTTPApplication;
+    {$ENDIF}
+  {$ELSE}
+    {$IF DEFINED(HORSE_APPTYPE_VCL)}
+      Horse.Provider.Nghttp2.VCL.THorseProviderNghttp2VCL;
+    {$ELSEIF DEFINED(HORSE_APPTYPE_DAEMON)}
+      Horse.Provider.Nghttp2.Daemon.THorseProviderNghttp2Daemon;
+    {$ELSE}
+      Horse.Provider.Nghttp2.THorseProviderNghttp2;
+    {$ENDIF}
+  {$ENDIF}
 {$ELSEIF DEFINED(HORSE_APPTYPE_DAEMON)}
   THorseProvider =
   {$IF DEFINED(FPC)}
