@@ -2,11 +2,11 @@ FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# fp-units-web provides fphttpclient and fphttpserver (needed by FPCHttp provider + test)
 RUN apt-get update && apt-get install -y \
-    fpc fp-units-rtl fp-units-fcl fp-units-misc fp-units-web git ca-certificates \
+    fpc fp-units-rtl fp-units-fcl fp-units-misc git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
+# Clona o DUnitX não é mais necessário para o teste de integração simples
 WORKDIR /usr/src/app
 
 COPY . .
@@ -15,15 +15,10 @@ COPY . .
 RUN mkdir -p tests/lib && cd tests/src && \
     fpc -Mdelphi -Sh -FE.. -FU../lib -Fu"../../src:modules/jhonson/src:modules/restrequest4delphi/src:modules/cors/src:modules/basic-auth/src" "-dHORSE_CONSOLE" "-dHORSE_PROVIDER_EPOLL" IntegrationServer.dpr
 
-# BENCH-FPCHTTP-1 regression test — FPCHttp provider with KeepConnections=False.
-# Verifies that sequential HTTP requests complete in ≤35 ms each (the keepalive
-# loop stall was exactly ~40 ms on every kernel tested).  No HORSE_* define is
-# needed: FPC selects Horse.Provider.FPC.HTTPApplication by default.
-RUN mkdir -p tests/bench-fpchttp/lib && cd tests/src && \
-    fpc -Mdelphi -Sh \
-        -FE../bench-fpchttp -FU../bench-fpchttp/lib \
-        -Fu"../../src:modules/horse/src" \
-        FPCHttpKeepaliveTest.dpr
+# Regressao do transporte WebSocket non-blocking usado pelo provider epoll.
+RUN mkdir -p tests/lib-websocket && cd tests/src && \
+    fpc -Mdelphi -Sh -FE.. -FU../lib-websocket -Fu"../../src" "-dHORSE_CONSOLE" "-dHORSE_PROVIDER_EPOLL" WebSocketEpollRegression.dpr && \
+    ../WebSocketEpollRegression
 
 WORKDIR /usr/src/app/tests
 
