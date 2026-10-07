@@ -4,7 +4,7 @@ unit Horse.Provider.Daemon;
   THorseProviderAbstract.ListenWithConfig calls the no-arg Listen, entering
   InternalListen with FPort = 0 - DEFAULT_PORT (9000).  Fix: override
   ListenWithConfig here so it calls SetPort(APort) before InternalListen.
-  AConfig is intentionally ignored — Daemon/Indy has no use for CrossSocket config. }
+  Unsupported TLS options are rejected first; other CrossSocket options are unused. }
 
 interface
 
@@ -29,6 +29,12 @@ type
     class var FPort: Integer;
     class var FHost: string;
     class var FMaxConnections: Integer;
+    { FIX-MAXCONN-RESET-1: the limits that were in force before the first time
+      a positive MaxConnections was applied, so that setting it back to 0
+      restores them instead of leaving the old limit in force. }
+    class var FMaxConnectionsApplied: Boolean;
+    class var FSavedWebMaxConnections: Integer;
+    class var FSavedBridgeMaxConnections: Integer;
     class var FListenQueue: Integer;
     class var FKeepConnectionAlive: Boolean;
     class var FIdHTTPWebBrokerBridge: TIdHTTPWebBrokerBridge;
@@ -64,6 +70,7 @@ type
     class property KeepConnectionAlive: Boolean read GetKeepConnectionAlive write SetKeepConnectionAlive;
     class property IOHandleSSL: IHorseProviderIOHandleSSL read GetIOHandleSSL write SetIOHandleSSL;
     class function GetActivePort: Integer; override;
+    class function IsRunning: Boolean;
     class procedure StopListen; override;
     class procedure StopListenGraceful(const ATimeoutMS: Integer = 5000); override;
     class procedure Listen; overload; override;
@@ -103,7 +110,14 @@ uses
   Posix.Signal,
   Posix.Fcntl,
   ThirdParty.Posix.Syslog,
-  System.Classes;
+  System.Classes,
+  Horse.Core;   { THorseCore.SetIsShuttingDown in the stop paths - Console and VCL
+                  already list it; without it this unit does not compile }
+
+class function THorseProvider.IsRunning: Boolean;
+begin
+  Result := FRunning;
+end;
 
 procedure HandleSignals(SigNum: Integer); cdecl;
 begin
@@ -269,10 +283,28 @@ begin
       LIdHTTPWebBrokerBridge := GetDefaultHTTPWebBroker;
       WebRequestHandler.WebModuleClass := WebModuleClass;
       try
+        { FIX-MAXCONN-RESET-1. WebRequestHandler is process-global and the Indy bridge
+          lives for the whole process, so a limit applied here outlives StopListen.
+          0 used to mean "don't touch", which made an applied limit permanent:
+          MaxConnections := 0 could never lift it without a restart. Now 0 still
+          leaves the defaults alone in a process that never set a limit, and
+          restores the values saved below in one that did. }
         if FMaxConnections > 0 then
         begin
+          if not FMaxConnectionsApplied then
+          begin
+            FSavedWebMaxConnections := WebRequestHandler.MaxConnections;
+            FSavedBridgeMaxConnections := GetDefaultHTTPWebBroker.MaxConnections;
+            FMaxConnectionsApplied := True;
+          end;
           WebRequestHandler.MaxConnections := FMaxConnections;
           GetDefaultHTTPWebBroker.MaxConnections := FMaxConnections;
+        end
+        else if FMaxConnectionsApplied then
+        begin
+          WebRequestHandler.MaxConnections := FSavedWebMaxConnections;
+          GetDefaultHTTPWebBroker.MaxConnections := FSavedBridgeMaxConnections;
+          FMaxConnectionsApplied := False;
         end;
         if FListenQueue = 0 then
           FListenQueue := IdListenQueueDefault;
@@ -434,6 +466,7 @@ end;
 class procedure THorseProvider.ListenWithConfig(const APort: Integer;
   const AConfig: THorseCrossSocketConfig);
 begin
+  ValidateNoUnsupportedTls(AConfig, 'Daemon');
   SetPort(APort);
   InternalListen;
 end;

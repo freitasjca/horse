@@ -79,6 +79,7 @@ uses
   Tests.Horse.Request.Recycle in 'tests\Tests.Horse.Request.Recycle.pas',
   Tests.Horse.Request.DecodeOnce in 'tests\Tests.Horse.Request.DecodeOnce.pas',
   Tests.Horse.Utils in 'tests\Tests.Horse.Utils.pas',
+  Tests.Horse.Provider.Config in 'tests\Tests.Horse.Provider.Config.pas',
   Tests.Horse.Core.RouterLifetime in 'tests\Tests.Horse.Core.RouterLifetime.pas',
   Tests.Horse.Core.Cookie in 'tests\Tests.Horse.Core.Cookie.pas',
   Tests.Horse.Core.Middleware in 'tests\Tests.Horse.Core.Middleware.pas',
@@ -100,6 +101,7 @@ uses
   Tests.Integration.AdvancedRouting in 'tests\Tests.Integration.AdvancedRouting.pas',
   Tests.Integration.Streaming in 'tests\Tests.Integration.Streaming.pas',
   Tests.Horse.Provider.RawAdapters in 'tests\Tests.Horse.Provider.RawAdapters.pas',
+  Tests.Horse.Provider.MaxConnections in 'tests\Tests.Horse.Provider.MaxConnections.pas',
   {$IFDEF HORSE_PROVIDER_IOCP}
   Tests.Horse.Provider.IOCP in 'tests\Tests.Horse.Provider.IOCP.pas',
   {$ENDIF}

@@ -1,11 +1,8 @@
 ﻿unit Horse.Provider.Config;
 
 // =============================================================================
-//  Horse.Provider.Config  —  NEW FILE (Horse fork for CrossSocket provider)
+//  Horse.Provider.Config — shared provider configuration
 // =============================================================================
-//  Upstream: https://github.com/HashLoad/horse  (tag 3.1.9)
-//  Fork:     https://github.com/your-org/horse
-//
 //  Purpose
 //  -------
 //  Holds THorseCrossSocketConfig so it can be used by BOTH:
@@ -16,12 +13,11 @@
 //  creating a circular dependency the Delphi compiler cannot resolve.
 //
 //  This file has NO dependencies on either Horse.Provider.Abstract or
-//  Horse.Provider.CrossSocket — it is a pure data unit.
+//  Horse.Provider.CrossSocket. It also validates unsupported TLS settings for
+//  built-in providers before they change state or start listening.
 //
-//  The identical record is also declared in Horse.Provider.CrossSocket.Server
-//  in the provider repository, which re-exports it for backward compatibility.
-//  When both units are in the search path the compiler will find this canonical
-//  version first (provider places its src/ after horse/src/).
+//  External providers should use this canonical record rather than declaring
+//  a second, potentially incompatible copy.
 // =============================================================================
 
 {$IF DEFINED(FPC)}
@@ -53,6 +49,15 @@ const
 
 
 type
+  // Minimum TLS protocol version a provider must accept (SSLMinVersion).
+  // Ordinal 0 is "no override", so a zero-initialised record keeps the
+  // provider's / TLS library's own floor.
+  THorseTlsMinVersion = (
+    htvDefault,   // provider / TLS library default - nothing is configured
+    htvTLS12,     // TLS 1.2 or newer (TLS 1.3 still allowed)
+    htvTLS13      // TLS 1.3 only
+  );
+
   THorseCrossSocketConfig = record
 
     // IO model
@@ -144,12 +149,38 @@ type
     // Default: False
 
     SSLCipherList: string;
-    // OpenSSL cipher-list string (TLS 1.2 format).  Empty = use CrossSocket's
-    // built-in secure list (Node.js-derived, ECDHE/DHE + AES-GCM/ChaCha20).
+    // TLS 1.2 AND BELOW ONLY. OpenSSL cipher-list rule string (aliases, '!'
+    // exclusions, @SECLEVEL), applied with SSL_CTX_set_cipher_list. Empty =
+    // the provider's / library's default list. This field does NOT affect
+    // TLS 1.3 - OpenSSL configures TLS 1.3 suites through a separate call, see
+    // SSLCipherSuitesTLS13. An @SECLEVEL=n here does set the context-wide
+    // security level, which TLS 1.3 handshakes obey too.
     // Override only when you have a specific compliance requirement.
-    // Applied via FServer.SetCipherList → SSL_CTX_set_cipher_list (TLSOPT-2 —
-    // requires the Net.CrossSslSocket.* patches / fork release). TLS 1.3 cipher
-    // suites are not affected by this field.
+
+    SSLCipherSuitesTLS13: string;
+    // TLS 1.3 cipher suites: exact names, colon-separated, in priority order,
+    // e.g. 'TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256'. Applied with
+    // SSL_CTX_set_ciphersuites (OpenSSL 1.1.1+). Empty = library default.
+    // Names are case-sensitive, and OpenSSL silently DROPS an unknown name
+    // that sits next to a valid one, so a provider should read the effective
+    // list back and refuse to start on a mismatch. A provider whose TLS
+    // library cannot configure TLS 1.3 suites must refuse a non-empty value at
+    // Listen rather than ignore it.
+    // Default: ''
+
+    SSLMinVersion: THorseTlsMinVersion;
+    // Minimum TLS protocol version the server accepts; see THorseTlsMinVersion.
+    // htvDefault makes no call, leaving the provider's / library's floor.
+    // A provider that cannot enforce the requested minimum must refuse at
+    // Listen rather than serve with a weaker one.
+    // Default: htvDefault
+    //
+    // The "must refuse" rules above are the CONTRACT for a provider that
+    // implements SSLCipherSuitesTLS13 / SSLMinVersion, not a guarantee from
+    // this record: Horse's built-in providers reject explicit TLS settings in
+    // ListenWithConfig. Older releases and external providers released before
+    // these fields existed may ignore them. doc/providers.md lists which
+    // provider versions apply or refuse each value.
 
     // ── Server identity ───────────────────────────────────────────────────
     ServerBanner: string;
@@ -161,7 +192,40 @@ type
     class function Default: THorseCrossSocketConfig; static;
   end;
 
+// Built-in providers do not consume TLS settings from this record. Reject an
+// explicit TLS request before opening a listener rather than serving weaker HTTP.
+procedure ValidateNoUnsupportedTls(const AConfig: THorseCrossSocketConfig;
+  const AProviderName: string);
+
 implementation
+
+uses
+{$IF DEFINED(FPC)}
+  SysUtils;
+{$ELSE}
+  System.SysUtils;
+{$ENDIF}
+
+procedure ValidateNoUnsupportedTls(const AConfig: THorseCrossSocketConfig;
+  const AProviderName: string);
+var
+  LField: string;
+begin
+  LField := '';
+  if AConfig.SSLEnabled then LField := 'SSLEnabled'
+  else if AConfig.SSLCertFile <> '' then LField := 'SSLCertFile'
+  else if AConfig.SSLKeyFile <> '' then LField := 'SSLKeyFile'
+  else if AConfig.SSLKeyPassword <> '' then LField := 'SSLKeyPassword'
+  else if AConfig.SSLCACertFile <> '' then LField := 'SSLCACertFile'
+  else if AConfig.SSLVerifyPeer then LField := 'SSLVerifyPeer'
+  else if AConfig.SSLCipherList <> '' then LField := 'SSLCipherList'
+  else if AConfig.SSLCipherSuitesTLS13 <> '' then LField := 'SSLCipherSuitesTLS13'
+  else if AConfig.SSLMinVersion <> htvDefault then LField := 'SSLMinVersion';
+  if LField <> '' then
+    raise Exception.CreateFmt('%s does not support %s in ListenWithConfig. ' +
+      'Use the provider-specific TLS configuration or a TLS-capable provider.',
+      [AProviderName, LField]);
+end;
 
 class function THorseCrossSocketConfig.Default: THorseCrossSocketConfig;
 begin
@@ -183,7 +247,9 @@ begin
   Result.SSLKeyPassword    := '';
   Result.SSLCACertFile     := '';
   Result.SSLVerifyPeer     := False;
-  Result.SSLCipherList     := '';    // empty = use CrossSocket built-in list
+  Result.SSLCipherList     := '';    // empty = provider / library default list (TLS <= 1.2)
+  Result.SSLCipherSuitesTLS13 := '';  // empty = library default TLS 1.3 suites
+  Result.SSLMinVersion     := htvDefault;
   Result.ServerBanner      := '';    // empty = emit 'unknown'
 end;
 

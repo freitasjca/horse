@@ -119,6 +119,21 @@ CrossSocket e Indy são **alternativas drop-in** para o mesmo código Horse. O m
 
 Para configuração (certificados TLS, limites de tamanho de body, número de threads IO, mTLS), veja a [documentação do próprio provider](https://github.com/freitasjca/horse-provider-crosssocket#readme). Um teste de integração TLS unidirecional + mútuo acompanha o `tests/` do provider (`HorseCSTLSTestServer` / `…Client`, veja `tests/TLS-TESTS.md`).
 
+Os campos de cifra TLS de `THorseCrossSocketConfig` (`Horse.Provider.Config`) são separados por geração de protocolo, porque o OpenSSL os configura por chamadas distintas. `SSLCipherList` vale **apenas para TLS 1.2 e anteriores**. `SSLCipherSuitesTLS13` define as suítes do TLS 1.3 (nomes exatos, com diferença entre maiúsculas e minúsculas), e `SSLMinVersion` (`htvDefault` / `htvTLS12` / `htvTLS13`) define a versão mínima do protocolo. Vazio / `htvDefault` não configura nada.
+
+**Quais providers aplicam estes campos.** São campos de um record. Se um valor tem efeito depende do provider que recebe o record, e um provider mais antigo compila contra ele e ignora os campos novos em silêncio:
+
+| Provider | `SSLCipherSuitesTLS13` | `SSLMinVersion` |
+|---|---|---|
+| [horse-provider-crosssocket](https://github.com/freitasjca/horse-provider-crosssocket) **≥ 1.0.27** | Aplicado. Um nome de suíte desconhecido impede o início, informando o nome | `htvTLS12`: o mínimo do Delphi-Cross-Socket já é TLS 1.2. `htvTLS13`: **recusa iniciar** — a biblioteca ainda não permite elevar o mínimo |
+| [horse-provider-nghttp2](https://github.com/freitasjca/horse-provider-nghttp2) **≥ 1.11.0** | Aplicado e relido; uma suíte descartada pelo OpenSSL impede o início | Aplicado e relido; uma divergência impede o início |
+| Versões anteriores desses dois providers | **Ignorado em silêncio** | **Ignorado em silêncio** |
+| Providers embutidos do Horse (Indy, HttpSys, IOCP, Epoll, Daemon, FPC) | Valores não vazios impedem o início | Valores diferentes do padrão impedem o início |
+
+O `ListenWithConfig` dos providers embutidos usa a porta e rejeita configurações TLS explícitas antes de alterar a porta ou abrir um listener. Isso inclui `SSLEnabled=True`, certificado/chave/senha/CA ou listas de cifras não vazios, `SSLVerifyPeer=True` e `SSLMinVersion` diferente do padrão. A exceção identifica o provider e o campo não suportado. Os valores padrão de TLS continuam aceitos; os demais campos deste record continuam ignorados. **Mudança de compatibilidade:** releases anteriores do Horse ignoravam essas configurações TLS silenciosamente. Remova-as do record compartilhado e configure TLS pela API suportada pelo provider; não simplesmente desative um requisito de segurança. Indy (Console, Daemon, VCL) atende TLS por `THorse.IOHandleSSL` (com seus próprios `SSLVersions` e `CipherList`), não por este record. HttpSys, IOCP, Epoll e os providers FPC atendem apenas HTTP sem TLS. Os providers mORMot2 e ICS têm records de configuração próprios; veja a documentação deles.
+
+Se você depende de `htvTLS13`, fixe a versão do provider nas dependências do Boss e verifique por fora: `openssl s_client -connect <host>:<port> -tls1_2` deve falhar. Este repositório testa os valores padrão do record e a rejeição de configurações TLS não suportadas pelos providers internos; não valida a negociação TLS de providers externos. A aplicação é testada nos repositórios dos providers contra um peer `openssl s_client`: CrossSocket `scripts/run-tls-tests.bat` passo 3, nghttp2 `samples/tests/build-fpc.sh` estágio 10c.
+
 ### Instalação 
 
 O `horse-provider-crosssocket` instala o Delphi-Cross-Socket via Boss. 
