@@ -28,7 +28,9 @@ foreach ($version in $Versions) {
         }
         $expect = if ($define) { 'excluded' } else { 'default' }
         & "$scenario/StreamFactoryCheck.exe" $expect *> "$scenario/run.log"
-        if ($LASTEXITCODE -ne 0) { throw "Regression failed: $scenario/run.log" }
+        if ($LASTEXITCODE -ne 0 -or (Get-Content "$scenario/run.log" -Raw) -match 'Unexpected Memory Leak') {
+            throw "Regression failed: $scenario/run.log"
+        }
         $count++
         Write-Host "PASS $version / ${name}: $(Get-Content "$scenario/run.log" -Raw)"
     }

@@ -117,6 +117,9 @@ var
   raised, expectDefault: Boolean;
   methodIndex, failureIndex: Integer;
 begin
+{$IFNDEF FPC}
+  ReportMemoryLeaksOnShutdown := True;
+{$ENDIF}
   producer := TProducer.Create;
   try
     expectDefault := ParamStr(1) = 'default';
