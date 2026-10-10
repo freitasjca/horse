@@ -18,6 +18,8 @@ A matriz Delphi de registro compila primeiro o grafo padrão, depois recompila a
 
 A injeção da factory é global ao processo. Mantenha estes testes em seu executável dedicado, não em uma fixture de streaming bem-sucedido executada concorrentemente. Os testes existentes de NDJSON, SSE e streaming concorrente permanecem na suíte principal:
 
+O handler HTTP de erro respeita `IsStreaming`, como os middlewares devem fazer para evitar cabeçalhos duplicados. Contra a unit de resposta anterior ao acerto, os dois testes HTTP retornam um 200 inesperado em vez de 503; com o acerto retornam a resposta de erro completa.
+
 ```powershell
 ./tests/run_delphi_tests.ps1 -Versions 22.0,23.0,37.0
 ```

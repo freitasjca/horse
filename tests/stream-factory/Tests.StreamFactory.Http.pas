@@ -62,7 +62,10 @@ begin
             raise Exception.Create('producer must not run');
           end);
       except
-        on E: Exception do Res.Status(503).Send('stream writer unavailable');
+        on E: Exception do
+          // Error middleware must not replace an already-started stream.
+          if not Res.IsStreaming then
+            Res.Status(503).Send('stream writer unavailable');
       end;
     end);
   THorse.Get('/refusing',
@@ -77,7 +80,9 @@ begin
               raise Exception.Create('producer must not run');
             end);
         except
-          on E: Exception do Res.Status(503).Send('stream writer unavailable');
+          on E: Exception do
+            if not Res.IsStreaming then
+              Res.Status(503).Send('stream writer unavailable');
         end;
       finally
         THorseResponse.RegisterStreamWriterFactory(nil);

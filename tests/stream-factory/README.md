@@ -18,6 +18,8 @@ The Delphi registration matrix first builds the default dependency graph, then r
 
 Factory injection is process-global. Keep these tests in their dedicated executable, not in a concurrently running successful-stream fixture. Existing NDJSON, SSE and concurrent streaming tests remain in the main suite:
 
+The HTTP error handler respects `IsStreaming`, as middleware must when avoiding duplicate headers. Against the pre-fix response unit, both HTTP tests return an unexpected 200 instead of 503; with the fix they return the complete error response.
+
 ```powershell
 ./tests/run_delphi_tests.ps1 -Versions 22.0,23.0,37.0
 ```
