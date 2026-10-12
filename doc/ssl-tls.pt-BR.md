@@ -21,7 +21,7 @@ O Indy (Provider padrão do Horse) realiza o gerenciamento de SSL/TLS utilizando
 *   Um arquivo de Certificado (ex: `server.crt`) e uma Chave Privada (ex: `server.key`) no formato PEM.
 
 ### Exemplo de Configuração:
-Para associar a lógica SSL ao servidor, injetamos a configuração utilizando o evento de inicialização de portas e vinculando o componente do Indy:
+Configure o handler suportado por `THorse.IOHandleSSL`. O padrão passa a ser somente TLS 1.2; veja a [política TLS do Indy](indy-tls-policy.pt-BR.md) para compatibilidade e negociação.
 
 ```pascal
 uses
@@ -29,17 +29,10 @@ uses
   IdSSLOpenSSL; // Necessário incluir esta unit do Indy
 
 begin
-  // Adiciona a configuração no manipulador de SSL
-  THorse.OnUseSSL := function: TObject
-  var
-    LSSLHandler: TIdServerIOHandlerSSLOpenSSL;
-  begin
-    LSSLHandler := TIdServerIOHandlerSSLOpenSSL.Create(nil);
-    LSSLHandler.SSLOptions.CertFile := 'caminho/para/o/certificado.crt';
-    LSSLHandler.SSLOptions.KeyFile := 'caminho/para/a/chave.key';
-    LSSLHandler.SSLOptions.Method := sslvTLSv1_2; // Força o uso de TLS 1.2
-    Result := LSSLHandler;
-  end;
+  THorse.IOHandleSSL
+    .CertFile('caminho/para/o/certificado.crt')
+    .KeyFile('caminho/para/a/chave.key')
+    .SSLVersions([sslvTLSv1_2]);
 
   THorse.Listen(9000);
 end;
@@ -49,31 +42,9 @@ end;
 
 ## 3. Configurando SSL/TLS no Provider HTTP.sys (Windows Nativo)
 
-Ao utilizar o provider `Horse.Provider.HttpSys` no Windows, o gerenciamento de conexões seguras é realizado diretamente pelo kernel do sistema operacional.
+O provider HttpSys embutido atende apenas HTTP. Ele não oferece HTTPS atualmente; vincular um certificado com `netsh` não altera essa capacidade. Utilize terminação TLS em um proxy reverso ou um provider com suporte HTTPS documentado.
 
-### Pré-requisito:
-Você não configura o certificado dentro do código Delphi. A vinculação é feita a nível de sistema operacional vinculando a porta TCP escolhida ao hash SHA1 do certificado (previamente instalado no repositório de Certificados do Computador Local).
-
-### Exemplo de Configuração no Sistema:
-1. Abra o PowerShell ou Prompt de Comando como Administrador.
-2. Registre a associação da porta e do certificado com o comando `netsh`:
-
-```cmd
-netsh http add sslcert ipport=0.0.0.0:443 certhash=SUA_CHAVE_SHA1_DO_CERTIFICADO appid={SEU_APP_GUID}
-```
-
-No código Delphi, basta iniciar o Horse escutando a porta segura:
-
-```pascal
-uses
-  Horse,
-  Horse.Provider.HttpSys; // Usa o driver do HTTP.sys
-
-begin
-  // Apenas inicia a escuta na porta vinculada ao SSL no Windows
-  THorse.Listen(443);
-end;
-```
+Consulte a [matriz de providers](providers.pt-BR.md) antes de escolher o transporte.
 
 ---
 

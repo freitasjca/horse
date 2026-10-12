@@ -264,18 +264,17 @@ dnf install openssl-libs
 apk add openssl libcrypto3 libssl3
 ```
 
-CrossSocket e mORMot aceitam tanto 1.1.x quanto 3.x — eles testam no startup. Se o loader não encontrar nenhum dos dois, o binário ainda roda, mas `SSLEnabled := True` falha no `Listen` com um erro claro de "no SSL backend available". O ICS usa OpenSSL 3.x/4.x e já embute as bibliotecas necessárias.
+CrossSocket e mORMot aceitam tanto 1.1.x quanto 3.x — eles testam no startup. Se o loader não encontrar nenhum dos dois, o binário ainda roda, mas `SSLEnabled := True` falha no `Listen` com um erro claro de "no SSL backend available". O provider ICS V9.x atual não suporta Linux; o ICS V10 exige uma adaptação do provider antes de poder ser suportado.
 
 Para deploys em containers mínimos ou ambientes air-gapped onde não dá pra contar com os pacotes da distro:
 - **CrossSocket:** entregue o `libssl.so` + `libcrypto.so` compatíveis junto do binário e declare na seção `[Service]` da unit systemd: `Environment="LD_LIBRARY_PATH=/opt/seuapp"`.
 - **mORMot2:** o pacote `mormot2static` inclui uma variante com link estático pra algumas plataformas (`mormot2static/static/x86_64-linux` no FPC) — veja o [samples/tests/README do horse-provider-mormot](https://github.com/freitasjca/horse-provider-mormot/blob/master/samples/tests/README.md) para o setup completo de Search-path.
-- **ICS:** somente Delphi (Windows + Linux64). Entregue o OpenSSL `.so` (Linux) / `.dll` (Windows) que acompanha a distribuição do ICS junto do binário.
 
 > **TLS mútuo (mTLS).** Os três providers verificam certificados de cliente quando `Config.SSLVerifyPeer := True` e um arquivo de CA é definido (`SSLCACertFile` no CrossSocket/mORMot, `SSLCAFile` no ICS). O `tests/TLS-TESTS.md` de cada provider tem um teste de integração executável (unidirecional + mTLS). O mTLS no servidor CrossSocket também exige os patches `Net.CrossSslSocket.*` ou o release do fork (veja o README dele).
 
 ### Windows
 
-Entregue as DLLs do OpenSSL **junto do `.exe`** (não jogue em `C:\Windows\System32` e não use uma pasta global no PATH — co-localizar com o binário evita que outros apps com OpenSSL bundled sequestrem o load):
+Para CrossSocket e mORMot, entregue as DLLs do OpenSSL **junto do `.exe`** (não jogue em `C:\Windows\System32` e não use uma pasta global no PATH — co-localizar com o binário evita que outros apps com OpenSSL bundled sequestrem o load):
 
 | Versão OpenSSL | Nomes das DLLs (por arquitetura) |
 |---|---|
@@ -284,7 +283,9 @@ Entregue as DLLs do OpenSSL **junto do `.exe`** (não jogue em `C:\Windows\Syste
 
 A fonte padrão são os [builds oficiais OpenSSL para Windows](https://wiki.openssl.org/index.php/Binaries) ou os [instaladores da SLProWeb](https://slproweb.com/products/Win32OpenSSL.html). Escolha **uma** versão e use ela em todos os ambientes — código que faz dynamic-load de `libssl-1_1.dll` não roda num host que só tem `libcrypto-3.dll`, e as duas não convivem no mesmo processo.
 
-Em deploy como Serviço Windows, as DLLs precisam estar na mesma pasta do `.exe` do serviço — o SCM **não** herda o `PATH` do usuário.
+Para Serviços Windows com CrossSocket/mORMot, as DLLs precisam estar na mesma pasta do `.exe` do serviço — o SCM **não** herda o `PATH` do usuário.
+
+**ICS (Delphi, Windows, V9.x):** com os padrões do ICS V9.7 (`OpenSSL_Resource_Files`), as DLLs OpenSSL são incorporadas como recursos no executável e extraídas em `C:\ProgramData\ICS-OpenSSL\<version>\` no primeiro uso. Isso não é link estático do OpenSSL. Nessa configuração, não é necessário distribuir DLLs separadas; a conta do serviço precisa de permissão de escrita nesse local no primeiro uso. Se o carregamento por recursos for desativado, configure e distribua as DLLs externas conforme a documentação do ICS. Colocar DLLs junto do executável não substitui o carregamento por recursos por padrão.
 
 ### Armadilha comum — crash por descasamento de versão
 

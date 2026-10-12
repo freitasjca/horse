@@ -83,8 +83,10 @@ end;
 constructor THorseProviderIOHandleSSL.Create;
 begin
   FActive := True;
-  FMethod := DEF_SSLVERSION;
-  FSSLVersions := DEF_SSLVERSIONS;
+  // Do not inherit Indy's legacy TLS 1.0-only defaults. This OpenSSL adapter
+  // supports TLS 1.2; older protocols require an explicit application opt-in.
+  FMethod := sslvTLSv1_2;
+  FSSLVersions := [sslvTLSv1_2];
 end;
 
 function THorseProviderIOHandleSSL.DHParamsFile: string;
@@ -110,8 +112,19 @@ begin
 end;
 
 function THorseProviderIOHandleSSL.Method(const AValue: TIdSSLVersion): IHorseProviderIOHandleSSL;
+var
+  LOptions: TIdSSLOptions;
 begin
-  FMethod := AValue;
+  // Keep both views consistent, including Indy's sslvSSLv23 special case.
+  // Providers assign Method followed by SSLVersions to the real IOHandler.
+  LOptions := TIdSSLOptions.Create;
+  try
+    LOptions.Method := AValue;
+    FMethod := LOptions.Method;
+    FSSLVersions := LOptions.SSLVersions;
+  finally
+    LOptions.Free;
+  end;
   Result := Self;
 end;
 
@@ -153,8 +166,17 @@ begin
 end;
 
 function THorseProviderIOHandleSSL.SSLVersions(const AValue: TIdSSLVersions): IHorseProviderIOHandleSSL;
+var
+  LOptions: TIdSSLOptions;
 begin
-  FSSLVersions := AValue;
+  LOptions := TIdSSLOptions.Create;
+  try
+    LOptions.SSLVersions := AValue;
+    FMethod := LOptions.Method;
+    FSSLVersions := LOptions.SSLVersions;
+  finally
+    LOptions.Free;
+  end;
   Result := Self;
 end;
 
